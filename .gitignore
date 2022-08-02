@@ -1,3 +1,6 @@
 /target
 /workspace
 /.idea
+access.log
+error.log
+nginx.pid

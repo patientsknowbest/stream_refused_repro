@@ -1,12 +1,9 @@
 package io.pkb.foo;
 
-import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.rest.client.api.IGenericClient;
-import ca.uhn.fhir.rest.client.interceptor.BasicAuthInterceptor;
 import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
-import org.hl7.fhir.r4.model.Patient;
+import okhttp3.Request;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -18,43 +15,38 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public class Main {
-    private static final int N_THREADS = 50;
+
+    private static final int N_THREADS = 256;
     // Via nginx container
-    private static final String BASE_URL = "https://fhir.localhost/fhir";
-    // Direct to aidbox
-//    private static final String BASE_URL = "http://fhir.localhost:8888/fhir";
-    
-    private static final String USER = "root";
-    private static final String PASSWORD = "secret";
-    private static final Class<Patient> FHIR_TYPE = Patient.class;
-    private static final String FHIR_ID = "123";
+    private static final String BASE_URL = "https://localhost:8443/";
+
     private static final int MAX_IDLE_CONNECTIONS = 20;
-    private static final Duration KEEP_ALIVE = Duration.ofMinutes(5);
-    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
-    private static final Duration READ_TIMEOUT = Duration.ofMinutes(10);
-    private static final Duration WRITE_TIMEOUT = Duration.ofMinutes(10);
+    private static final Duration KEEP_ALIVE = Duration.ofSeconds(5);
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(1);
+    private static final Duration READ_TIMEOUT = Duration.ofSeconds(1);
+    private static final Duration WRITE_TIMEOUT = Duration.ofSeconds(1);
     private static final boolean RETRY_FAILURE  = false;
     private static final List<Protocol> PROTOCOLS = List.of(Protocol.HTTP_1_1, Protocol.HTTP_2);
 
     public static void main(String[] args) throws InterruptedException {
-
         var client = okHttpClient();
         Thread[] threads = new Thread[N_THREADS];
         for (int i = 0; i < N_THREADS; i++) {
             threads[i] = new Thread(() -> {
                 try {
-                    FhirContext ctx = FhirContext.forR4();
-                    ctx.setRestfulClientFactory(new MyBadHttpRestfulClientFactory(client, ctx));
-                    IGenericClient genericClient = ctx.newRestfulGenericClient(BASE_URL);
-                    genericClient.registerInterceptor(new BasicAuthInterceptor(USER, PASSWORD));
                     while (true) {
-                        var patient = genericClient.read().resource(FHIR_TYPE).withId(FHIR_ID).execute();
-                        System.out.println("got resource id " + patient.getId());
+                        try (var response = client.newCall(new Request.Builder()
+                                        .url(BASE_URL)
+                                        .get()
+                                        .build())
+                                .execute()) {
+                            System.out.println(String.format("response code=[%d]", response.code()));
+                        }
                     }
-                } catch (Throwable t) {
-                    System.out.println(t);
-                    t.printStackTrace();
-                    System.exit(1);// Bomb the whole program as soonas we error
+                } catch (Exception e) {
+                    System.err.println(e.getMessage());
+                    e.printStackTrace();
+                    System.exit(1);
                 }
             });
             threads[i].start();
@@ -63,7 +55,8 @@ public class Main {
             threads[i].join();
         }
     }
-    
+
+
     private static OkHttpClient okHttpClient() {
         try {
             // Trust all certs
@@ -85,7 +78,7 @@ public class Main {
             };
             SSLContext sslContext = SSLContext.getInstance("SSL");
             sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
-            
+
             // same config as we are on prod
             var pool = new ConnectionPool(MAX_IDLE_CONNECTIONS, KEEP_ALIVE.toMillis(), TimeUnit.MILLISECONDS);
             return new OkHttpClient()
